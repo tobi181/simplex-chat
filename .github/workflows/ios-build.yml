@@ -4,43 +4,33 @@ on:
 
 jobs:
   build-ios:
-    # 依然坚持使用 macos-13 (Intel)，因为它的 14GB 内存比 M1 的 7GB 更大
+    # 使用 macOS 15 Intel (GitHub 推荐的配置)
     runs-on: macos-15-intel
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # [已删除] Enable Swap 步骤 (macOS 不支持，且无法手动扩容)
-
-      # 1. 安装 Nix 构建工具 (修复 macOS UID 冲突问题)
+      # 1. 安装 Nix (改用 DeterminateSystems，完美解决 macOS 15 UID 冲突)
       - name: Install Nix
-        uses: cachix/install-nix-action@v25
+        uses: DeterminateSystems/nix-installer-action@v16
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          # 关键修复：设置初始 UID 为 351，避开 macOS 系统保留的 301-304
-          install_options: --darwin-use-unencrypted-nix-store-volume --daemon --daemon-user-count 8 --nix-extra-conf-file /dev/null
-        env:
-          # 强制指定起始 UID，解决 eDSRecordAlreadyExists 错误
-          NIX_FIRST_BUILD_UID: 351
-          
-          # 必须的额外配置
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+          # 在这里配置额外的缓存服务器，加速构建
+          extra-conf: |
             trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             substituters = https://cache.nixos.org https://cache.zw3rk.com
 
+      # 2. 启用 Magic Cache (可选，进一步尝试利用 Nix 缓存)
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@v8
 
-      # 2. 构建 iOS 静态库 (核心修改点)
-      # 即使没有 Swap，我们尝试把并发数压到最低 (-j 1) 来防止 OOM
+      # 3. 构建 iOS 静态库
+      # 依然保持单核串行编译，防止 14GB 内存溢出
       - name: Build Haskell Static Lib for iOS
         run: |
           echo "Building Haskell Core with low concurrency..."
           
-          # 关键修改：
-          # --max-jobs 1: 限制同时编译的包数量为 1
-          # --cores 1: 限制每个编译器进程使用的 CPU 核心数为 1
-          # 这样可以最大程度降低峰值内存占用，虽然编译会变慢。
+          # 限制并发为 1
           nix build .#simplex-chat-ios-static \
             --max-jobs 1 \
             --cores 1 \
@@ -49,10 +39,10 @@ jobs:
           
           echo "Copying libraries..."
           mkdir -p apps/ios/SimpleXChat/Lib
-          # 尝试复制 .a 文件，如果路径不对也不报错，方便后续调试
+          # 尝试复制 .a 文件
           cp -L result/lib/*.a apps/ios/SimpleXChat/Lib/ || echo "Warning: Auto-copy failed"
 
-      # 3. 安装依赖
+      # 4. 安装 CocoaPods 依赖
       - name: Install Dependencies
         run: |
           cd apps/ios
@@ -60,12 +50,10 @@ jobs:
             pod install --repo-update
           fi
 
-      # 4. 打包 IPA
+      # 5. 打包 IPA
       - name: Archive and Export IPA
         run: |
           cd apps/ios
-          
-          # 创建假的 build xcarchive 目录结构以防万一
           mkdir -p build 
 
           xcodebuild archive \
@@ -78,13 +66,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-          # 导出
           mkdir -p build/Payload
           cp -r build/SimpleXChat.xcarchive/Products/Applications/SimpleXChat.app build/Payload/
           cd build
           zip -r SimpleXChat.ipa Payload
 
-      # 5. 上传
+      # 6. 上传产物
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
