@@ -24,6 +24,11 @@ jobs:
       - name: Setup Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v8
 
+      - name: Show flake outputs
+        run: |
+          nix --version
+          nix flake show --all-systems
+          
       # 3. 构建 iOS 静态库
       # 依然保持单核串行编译，防止 14GB 内存溢出
       - name: Build Haskell Static Lib for iOS
