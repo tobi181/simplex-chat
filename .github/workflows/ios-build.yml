@@ -13,15 +13,23 @@ jobs:
 
       # [已删除] Enable Swap 步骤 (macOS 不支持，且无法手动扩容)
 
-      # 1. 安装 Nix
+      # 1. 安装 Nix 构建工具 (修复 macOS UID 冲突问题)
       - name: Install Nix
         uses: cachix/install-nix-action@v25
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          # 关键修复：设置初始 UID 为 351，避开 macOS 系统保留的 301-304
+          install_options: --darwin-use-unencrypted-nix-store-volume --daemon --daemon-user-count 8 --nix-extra-conf-file /dev/null
+        env:
+          # 强制指定起始 UID，解决 eDSRecordAlreadyExists 错误
+          NIX_FIRST_BUILD_UID: 351
+          
+          # 必须的额外配置
           extra_nix_config: |
             experimental-features = nix-command flakes
             trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             substituters = https://cache.nixos.org https://cache.zw3rk.com
+
 
       # 2. 构建 iOS 静态库 (核心修改点)
       # 即使没有 Swap，我们尝试把并发数压到最低 (-j 1) 来防止 OOM
