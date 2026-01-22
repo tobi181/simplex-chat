@@ -4,39 +4,33 @@ on:
 
 jobs:
   build-ios:
-    # 使用 macOS 15 Intel (GitHub 推荐的配置)
+    # 依然使用 macOS 15 Intel
     runs-on: macos-15-intel
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 1. 安装 Nix (改用 DeterminateSystems，完美解决 macOS 15 UID 冲突)
+      # 1. 安装 Nix (DeterminateSystems)
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
         with:
-          # 在这里配置额外的缓存服务器，加速构建
           extra-conf: |
             trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             substituters = https://cache.nixos.org https://cache.zw3rk.com
 
-      # 2. 启用 Magic Cache (可选，进一步尝试利用 Nix 缓存)
+      # 2. 启用 Magic Cache
       - name: Setup Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@v8
 
-      - name: Show flake outputs
-        run: |
-          nix --version
-          nix flake show --all-systems
-          
-      # 3. 构建 iOS 静态库
-      # 依然保持单核串行编译，防止 14GB 内存溢出
+      # 3. 构建 iOS 静态库 (使用我们在 flake show 中发现的准确名称)
       - name: Build Haskell Static Lib for iOS
         run: |
-          echo "Building Haskell Core with low concurrency..."
+          echo "Building Haskell Core for iOS..."
           
-          # 限制并发为 1
-          nix build .#simplex-chat-ios-static \
+          # 关键修正：使用 flake show 输出的确切名称
+          # 注意：需要在名称上加引号，因为包含冒号
+          nix build .#x86_64-darwin-ios:lib:simplex-chat \
             --max-jobs 1 \
             --cores 1 \
             --accept-flake-config \
@@ -44,10 +38,15 @@ jobs:
           
           echo "Copying libraries..."
           mkdir -p apps/ios/SimpleXChat/Lib
-          # 尝试复制 .a 文件
-          cp -L result/lib/*.a apps/ios/SimpleXChat/Lib/ || echo "Warning: Auto-copy failed"
+          
+          # Nix 构建产物通常在 ./result 链接中
+          # 如果是 lib 类型，里面应该有 .a 文件
+          cp -L result/lib/*.a apps/ios/SimpleXChat/Lib/ || echo "Copy failed or no .a files found"
+          
+          # 验证
+          ls -R apps/ios/SimpleXChat/Lib/
 
-      # 4. 安装 CocoaPods 依赖
+      # 4. 安装 CocoaPods
       - name: Install Dependencies
         run: |
           cd apps/ios
@@ -76,7 +75,7 @@ jobs:
           cd build
           zip -r SimpleXChat.ipa Payload
 
-      # 6. 上传产物
+      # 6. 上传
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
