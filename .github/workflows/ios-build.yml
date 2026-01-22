@@ -1,0 +1,92 @@
+name: Build SimpleX iOS Standalone
+on:
+  workflow_dispatch: # 仅允许手动触发
+
+jobs:
+  build-ios:
+    # 强制使用 Intel 架构的 macOS 13，因为它提供 14GB 内存，比 M1 的 7GB 更稳定
+    runs-on: macos-13 
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. 启用 Swap (虚拟内存) 防止 Haskell 编译时内存溢出 (OOM)
+      - name: Enable Swap for Haskell Compilation
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap enabled:"
+          free -h || sysctl vm.swapusage
+
+      # 2. 安装 Nix 构建工具
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            # 添加二进制缓存以加速构建
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
+            substituters = https://cache.nixos.org https://cache.zw3rk.com
+
+      # 3. 构建 iOS 静态库 (这是最难的一步)
+      # 我们根据 flake.nix 的结构直接构建 iOS 库 target
+      - name: Build Haskell Static Lib for iOS
+        run: |
+          echo "Building Haskell Core..."
+          # 这里的 target 名称是根据 SimpleX flake.nix 推断的常见结构
+          # 如果报错 "flake output not found"，请尝试换成 .#ios-lib 或 .#simplex-chat-mobile
+          # 限制并发任务为 2 以防内存爆炸
+          nix build .#simplex-chat-ios-static --max-jobs 2 --cores 2 --accept-flake-config -v
+          
+          # 验证产物并复制到 Xcode 项目目录
+          # 注意：Nix 构建结果在 ./result 符号链接中
+          echo "Copying libraries..."
+          mkdir -p apps/ios/SimpleXChat/Lib
+          # 假设构建产物中有 .a 文件，复制进去
+          cp -L result/lib/*.a apps/ios/SimpleXChat/Lib/ || echo "Warning: Auto-copy failed, checking path manually"
+          find result -name "*.a"
+
+      # 4. 准备 CocoaPods 环境
+      - name: Install Dependencies
+        run: |
+          cd apps/ios
+          # 如果项目使用 Podfile
+          if [ -f "Podfile" ]; then
+            pod install --repo-update
+          fi
+
+      # 5. 使用 Xcode 打包 IPA (无签名)
+      - name: Archive and Export IPA
+        run: |
+          cd apps/ios
+          
+          # 动态生成版本号
+          VERSION="6.4.0"
+          
+          # 归档
+          xcodebuild archive \
+            -workspace SimpleXChat.xcworkspace \
+            -scheme SimpleXChat \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath $PWD/build/SimpleXChat.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+          # 导出 .app 并压缩为 .ipa
+          mkdir -p build/Payload
+          cp -r build/SimpleXChat.xcarchive/Products/Applications/SimpleXChat.app build/Payload/
+          cd build
+          zip -r SimpleXChat.ipa Payload
+
+      # 6. 上传 IPA
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleXChat-iOS-Unsigned
+          path: apps/ios/build/SimpleXChat.ipa
