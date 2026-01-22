@@ -5,7 +5,7 @@ on:
 jobs:
   build-ios:
     # 强制使用 Intel 架构的 macOS 13，因为它提供 14GB 内存，比 M1 的 7GB 更稳定
-    runs-on: macos-13 
+    runs-on: macos-15-intel
     
     steps:
       - name: Checkout Code
